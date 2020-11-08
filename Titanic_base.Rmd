@@ -1,0 +1,189 @@
+---
+title: "Titanic: Machine Learning from Disaster"
+output: 
+  html_document:
+    keep_md: true
+---
+
+
+## 1. Code for reading in the dataset and/or processing the data
+
+```{r}
+
+#Load important R libraries
+
+library(ggplot2)
+library(knitr)
+library(dplyr)
+library(randomForest)
+
+#Setting Seed for reproducibility of results
+
+set.seed(666)
+
+#Check the current working directory
+
+getwd()
+
+#Check files in working directory
+
+dir()
+
+#Read the input data file
+
+train <- read.csv2("input/train.csv", header = TRUE, sep = ",", na.strings = "", stringsAsFactors = FALSE)
+test <- read.csv2("input/test.csv", header = TRUE, sep = ",", na.strings = "", stringsAsFactors = FALSE)
+gender_sub <- read.csv2("input/gender_submission.csv", header = TRUE, sep = ",", na.strings = "", stringsAsFactors = FALSE)
+
+
+#Check the input data
+
+head(train)
+head(test)
+head(gender_sub)
+summary(train)
+
+```
+
+
+## 2. Merge train and test datasets
+
+```{r}
+
+#Check missing values, NA's in data set
+
+library(Amelia)
+missmap(train, col=c("red", "green"), main = "Missing Values in train dataset")
+missmap(test, col=c("red", "green"), main = "Missing Values in test dataset")
+
+#Result: Missing values mostly in "Cabin" and "Age" columns, rest columns don't have any (or few) values missing
+
+#combine train and test data set
+
+#create identifier column if we need to separate train and test data later, we'll add a column "IsTrain" with values (train=TRUE, test=FALSE) to both datasets
+
+train$IsTrain <- TRUE
+test$IsTrain <- FALSE
+
+
+#tail(train)
+#tail(test)
+
+#Add "Survived" column to test and fill NA before merging test and train
+
+test$Survived <- NA
+
+# Merge train and test
+
+merge <- rbind(train, test)
+tail(merge)
+table(merge$IsTrain)
+
+
+```
+
+## 3. Base Model with minimal data processing (Missing Value + Catagorical Var treatment)
+
+```{r}
+#Missing value overview in Merge dataset
+
+missmap(merge, col=c("red", "green"), main = "Missing Values in combined dataset")
+#Result: Missing values mostly in "Cabin" and "Age" columns, Survived column is not available for test records - Which is normal. For other columns also, we'll check if any missing values are there and treat them if possible
+
+#Check missing values in all relevant columns (Exc. PassengerID, Survived, IsTrain)
+
+
+table(is.na(merge$Age)) #263 missing values
+table(merge$Age)
+
+table(is.na(merge$Pclass)) #NO missing values, Identified as categorical variable
+table(merge$Pclass) #1: 323 + 2: 277 + 3: 709 (Most Passengers are traveling in 3rd Class)
+
+table(is.na(merge$Name)) #NO missing values
+
+table(is.na(merge$Sex)) #NO missing values, Identified as categorical variable
+table(merge$Sex) #F: 466 + M: 843 (Two-third passengers are Male)
+
+table(is.na(merge$SibSp)) #NO missing values
+
+table(is.na(merge$Parch)) #NO missing values
+
+table(is.na(merge$Ticket)) #NO missing values
+
+table(is.na(merge$Fare)) #1 missing values
+
+table(is.na(merge$Cabin)) #1014 missing values
+
+table(is.na(merge$Embarked)) #2 missing values, Identified as categorical variable
+table(merge$Embarked) # C: 270 + Q: 123 + S: 914 + 2 NA (missing values)
+
+# We need to treat Cabin, Age, fare and Embarked for missing values. For a simplistic approach, we can fill median values for Age and Fare. Also, we can take mode (most common) class for  Embarked. Cabin? It could be bit tricky, so we will not use this column for our prediction for now.
+
+merge[is.na(merge$Embarked), "Embarked"] <- 'S'  #Replace NA with mode (Most frequent) value
+
+merge$Age <- as.numeric(as.character(merge$Age))   #convert Age to numeric if imported as chr
+merge[is.na(merge$Age), "Age"] <- median(merge$Age, na.rm = TRUE) #Replace NA with median value
+
+
+merge$Fare <- as.numeric(as.character(merge$Fare))   #convert Fare to numeric if imported as chr
+merge[is.na(merge$Fare), "Fare"] <- median(merge$Fare, na.rm = TRUE) #Replace NA with median value
+
+# We need to treat categorical columns too, Pclass, Sex and Embarked (as identified earlier)
+
+merge$Pclass <- as.factor(merge$Pclass)
+merge$Sex <- as.factor(merge$Sex)
+merge$Embarked <- as.factor(merge$Embarked)
+
+# Also  change the predictor var "Survived" as factor (0, 1)
+
+merge$Survived <- as.factor(merge$Survived)
+
+# Check Structure of dataset
+
+str(merge)
+
+
+# Split back to Test, Train after cleaning
+
+train <- merge[merge$IsTrain==TRUE,]
+test <- merge[!merge$IsTrain==TRUE,]
+
+# Base Model with Random Forest
+
+#explicitly select the columns for prediction and strore in formulae
+
+form <- as.formula("Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked")
+
+rf_model <- randomForest(formula = form, data = train, ntree = 500, mtry = 3, nodesize = 0.01 * nrow(train))
+
+test_features <- "Pclass + Sex + Age + SibSp + Parch + Fare + Embarked"
+
+#Make Prediction on Test set
+
+Survived <- predict(rf_model, newdata = test)
+
+#Check Prediction
+
+Survived
+
+#### Create output file
+
+#save Id values from test data
+PassengerId <- test$PassengerId
+
+#Initiate output dataframe with IDs
+df <- as.data.frame(PassengerId)
+
+#Add column for prediction
+df$Survived <- Survived
+
+#Check Structure of output dataframe
+str(df)
+
+#write submission file, it will be saved in your working directory
+
+write.csv(df, file = "baseSubmission.csv", row.names = FALSE)
+
+```
+
+## Now you can upload the csv file to Kaggle and check your score. Score of this model was 0.77272 at the time of upload.
