@@ -1,9 +1,26 @@
 ---
-title: "Titanic: Machine Learning from Disaster"
+title: "A beginner's approach to 'Titanic: Machine Learning from Disaster' in R"
 output: 
   html_document:
     keep_md: true
 ---
+
+## Introduction
+
+This is an attempt to onboard to 'Titanic: Machine Learning from Disaster' with R. This competition is widely considered as gateway to kaggle - One of the best places to learn, implement and test your data science knowledge on web.
+
+Competition link: https://www.kaggle.com/c/titanic
+
+However, this code is not meant to excel at the competition or get the best score. This might be a useful reference to someone who is absolute beginner to kaggle, to get a minimal understanding of "end-to-end" aspects in R. From my own experience, for a beginner a lots of details (eda, plotting, feature engineering, model tuning) could be bit overwhelming at the start. My approach only talks about bare minimal, so this is not a reference to "Best Approach". However, it could help anyone quickly develop their first model and understand basic concepts. The logical progression after this should be to bring small improvements by focusing on details. There are many notebooks on kaggle itself, which could be good reference to implement best practices.
+
+Assumptions: 
+
+1. User is familiar to R, at least the basic functions. 
+2. Rstudio (or some other IDE) is installed and properly configured.
+3. Data files are downloaded and saved in R working directory.
+
+Github link for code: https://github.com/yashendu/kaggle_Titanic
+
 
 
 ## 1. Code for reading in the dataset and/or processing the data
@@ -12,14 +29,14 @@ output:
 
 #Load important R libraries
 
-library(ggplot2)
-library(knitr)
-library(dplyr)
-library(randomForest)
+library(ggplot2)       #For plotting, but we don't use it extensively in our code
+library(knitr)         #For converting to HTML and publishing, most probably you won't need this
+library(dplyr)         #Data manipulation
+library(randomForest)  #Random Forest functions
 
 #Setting Seed for reproducibility of results
 
-set.seed(666)
+set.seed(666)     #Good practice
 
 #Check the current working directory
 
@@ -33,15 +50,23 @@ dir()
 
 train <- read.csv2("input/train.csv", header = TRUE, sep = ",", na.strings = "", stringsAsFactors = FALSE)
 test <- read.csv2("input/test.csv", header = TRUE, sep = ",", na.strings = "", stringsAsFactors = FALSE)
-gender_sub <- read.csv2("input/gender_submission.csv", header = TRUE, sep = ",", na.strings = "", stringsAsFactors = FALSE)
 
 
 #Check the input data
 
 head(train)
 head(test)
-head(gender_sub)
+
 summary(train)
+
+#Check missing values, NA's in data set
+
+library(Amelia) #For missmap, I find it good visual to see missing values at overview level
+
+missmap(train, col=c("red", "green"), main = "Missing Values in train dataset")
+missmap(test, col=c("red", "green"), main = "Missing Values in test dataset")
+
+#Result: Missing values mostly in "Cabin" and "Age" columns, rest columns don't have any (or few) values missing
 
 ```
 
@@ -49,14 +74,6 @@ summary(train)
 ## 2. Merge train and test datasets
 
 ```{r}
-
-#Check missing values, NA's in data set
-
-library(Amelia)
-missmap(train, col=c("red", "green"), main = "Missing Values in train dataset")
-missmap(test, col=c("red", "green"), main = "Missing Values in test dataset")
-
-#Result: Missing values mostly in "Cabin" and "Age" columns, rest columns don't have any (or few) values missing
 
 #combine train and test data set
 
@@ -66,8 +83,8 @@ train$IsTrain <- TRUE
 test$IsTrain <- FALSE
 
 
-#tail(train)
-#tail(test)
+#head(train)
+#head(test)
 
 #Add "Survived" column to test and fill NA before merging test and train
 
@@ -76,18 +93,18 @@ test$Survived <- NA
 # Merge train and test
 
 merge <- rbind(train, test)
-tail(merge)
+head(merge)
 table(merge$IsTrain)
-
 
 ```
 
-## 3. Base Model with minimal data processing (Missing Value + Catagorical Var treatment)
+## 3. Minimal data processing (Missing Value + Catagorical Var treatment)
 
 ```{r}
 #Missing value overview in Merge dataset
 
 missmap(merge, col=c("red", "green"), main = "Missing Values in combined dataset")
+
 #Result: Missing values mostly in "Cabin" and "Age" columns, Survived column is not available for test records - Which is normal. For other columns also, we'll check if any missing values are there and treat them if possible
 
 #Check missing values in all relevant columns (Exc. PassengerID, Survived, IsTrain)
@@ -118,6 +135,7 @@ table(is.na(merge$Embarked)) #2 missing values, Identified as categorical variab
 table(merge$Embarked) # C: 270 + Q: 123 + S: 914 + 2 NA (missing values)
 
 # We need to treat Cabin, Age, fare and Embarked for missing values. For a simplistic approach, we can fill median values for Age and Fare. Also, we can take mode (most common) class for  Embarked. Cabin? It could be bit tricky, so we will not use this column for our prediction for now.
+## We use 'median' not 'mean' as median is less sensitive to extreme values (Outliers) and we are not treating outliers here
 
 merge[is.na(merge$Embarked), "Embarked"] <- 'S'  #Replace NA with mode (Most frequent) value
 
@@ -148,7 +166,12 @@ str(merge)
 train <- merge[merge$IsTrain==TRUE,]
 test <- merge[!merge$IsTrain==TRUE,]
 
-# Base Model with Random Forest
+
+```
+
+## 4. Base model with Random Forest
+
+```{r}
 
 #explicitly select the columns for prediction and strore in formulae
 
@@ -156,7 +179,6 @@ form <- as.formula("Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embar
 
 rf_model <- randomForest(formula = form, data = train, ntree = 500, mtry = 3, nodesize = 0.01 * nrow(train))
 
-test_features <- "Pclass + Sex + Age + SibSp + Parch + Fare + Embarked"
 
 #Make Prediction on Test set
 
@@ -186,4 +208,20 @@ write.csv(df, file = "baseSubmission.csv", row.names = FALSE)
 
 ```
 
-## Now you can upload the csv file to Kaggle and check your score. Score of this model was 0.77272 at the time of upload.
+
+# Now you can upload the csv file to Kaggle and check your score. Score of this model was 0.77272 at the time of upload.
+
+## Notes and references
+
+Data Science community have set really high standards when it comes to knowledge sharing. I will mention (and shout thanks!) few references which were helpful to me and might be useful to you for further reading (in no particular order). I'm open for constructive feedback and questions through comments.
+
+https://www.blopig.com/blog/2017/04/a-very-basic-introduction-to-random-forests-using-r/
+
+https://www.rdocumentation.org/packages/randomForest/versions/4.6-14/topics/randomForest
+
+https://towardsdatascience.com/random-forest-in-r-f66adf80ec9
+
+https://www.youtube.com/watch?v=Zx2TguRHrJE&list=PL8eNk_zTBST83rnRPkypp_0MrjoXobLDF&index=3
+
+https://www.geeksforgeeks.org/random-forest-approach-for-classification-in-r-programming/?ref=rp
+
