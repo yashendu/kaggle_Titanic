@@ -1,0 +1,434 @@
+---
+title: " A beginner's approach in Titanic: Machine Learning from Disaster in R"
+output: 
+  html_document:
+    keep_md: true
+---
+
+
+## 1. Code for reading in the dataset and/or processing the data
+
+```{r}
+
+#Common Code chunk <must run>
+#Load important R libraries
+
+library(ggplot2)
+library(knitr)
+library(dplyr)
+library(randomForest) #RF Model
+library(rpart)        #Decision Tree Model
+library(rpart.plot)   #Decision Tree Plot
+library(RColorBrewer)
+library(rattle)
+library(caret)
+library(e1071)
+library(class) #knn
+
+#Setting Seed for reproducibility of results
+
+set.seed(666)
+
+#Check the current working directory
+
+getwd()
+
+#Check files in working directory
+
+dir()
+
+#Read the input data file
+
+train <- read.csv2("input/train.csv", header = TRUE, sep = ",", na.strings = "", stringsAsFactors = FALSE)
+test <- read.csv2("input/test.csv", header = TRUE, sep = ",", na.strings = "", stringsAsFactors = FALSE)
+#gender_sub <- read.csv2("input/gender_submission.csv", header = TRUE, sep = ",", na.strings = "", stringsAsFactors = FALSE)
+
+
+#Check the input data
+
+#head(train)
+#head(test)
+#head(gender_sub)
+summary(train)
+
+```
+
+
+## 2. Merge train and test datasets
+
+```{r}
+
+#Common Code chunk <must run>
+#Check missing values, NA's in data set
+
+library(Amelia)
+missmap(train, col=c("red", "green"), main = "Missing Values in train dataset")
+missmap(test, col=c("red", "green"), main = "Missing Values in test dataset")
+
+#Result: Missing values mostly in "Cabin" and "Age" columns, rest columns don't have any (or few) values missing
+
+#combine train and test data set
+
+#create identifier column if we need to separate train and test data later, we'll add a column "IsTrain" with values (train=TRUE, test=FALSE) to both datasets
+
+train$IsTrain <- TRUE
+test$IsTrain <- FALSE
+
+
+#tail(train)
+#tail(test)
+
+#Add "Survived" column to test and fill NA before merging test and train
+
+test$Survived <- NA
+
+# Merge train and test
+
+merge <- rbind(train, test)
+tail(merge)
+table(merge$IsTrain)
+
+
+```
+
+## 3. Base Model with minimal data processing (Missing Value + Catagorical Var treatment)
+
+```{r}
+#Common Code chunk <must run>
+#Missing value overview in Merge dataset
+
+missmap(merge, col=c("red", "green"), main = "Missing Values in combined dataset")
+#Result: Missing values mostly in "Cabin" and "Age" columns, Survived column is not available for test records - Which is normal. For other columns also, we'll check if any missing values are there and treat them if possible
+
+#Check missing values in all relevant columns (Exc. PassengerID, Survived, IsTrain)
+
+
+table(is.na(merge$Age)) #263 missing values
+table(merge$Age)
+
+table(is.na(merge$Pclass)) #NO missing values, Identified as categorical variable
+table(merge$Pclass) #1: 323 + 2: 277 + 3: 709 (Most Passengers are traveling in 3rd Class)
+
+table(is.na(merge$Name)) #NO missing values
+
+table(is.na(merge$Sex)) #NO missing values, Identified as categorical variable
+table(merge$Sex) #F: 466 + M: 843 (Two-third passengers are Male)
+
+table(is.na(merge$SibSp)) #NO missing values
+
+table(is.na(merge$Parch)) #NO missing values
+
+table(is.na(merge$Ticket)) #NO missing values
+
+table(is.na(merge$Fare)) #1 missing values
+
+table(is.na(merge$Cabin)) #1014 missing values
+
+table(is.na(merge$Embarked)) #2 missing values, Identified as categorical variable
+table(merge$Embarked) # C: 270 + Q: 123 + S: 914 + 2 NA (missing values)
+
+# We need to treat Cabin, Age, fare and Embarked for missing values. For a simplistic approach, we can fill median values for Age and Fare. Also, we can take mode (most common) class for  Embarked. Cabin? It could be bit tricky, so we will not use this column for our prediction for now.
+
+merge[is.na(merge$Embarked), "Embarked"] <- 'S'  #Replace NA with mode (Most frequent) value
+
+merge$Age <- as.numeric(as.character(merge$Age))   #convert Age to numeric if imported as chr
+merge[is.na(merge$Age), "Age"] <- median(merge$Age, na.rm = TRUE) #Replace NA with median value
+
+
+merge$Fare <- as.numeric(as.character(merge$Fare))   #convert Fare to numeric if imported as chr
+merge[is.na(merge$Fare), "Fare"] <- median(merge$Fare, na.rm = TRUE) #Replace NA with median value
+
+# We need to treat categorical columns too, Pclass, Sex and Embarked (as identified earlier)
+
+merge$Pclass <- as.factor(merge$Pclass)
+merge$Sex <- as.factor(merge$Sex)
+merge$Embarked <- as.factor(merge$Embarked)
+
+# Also  change the predictor var "Survived" as factor (0, 1)
+
+merge$Survived <- as.factor(merge$Survived)
+
+# Check Structure of dataset
+
+str(merge)
+
+```
+```{r}
+#Common Code chunk <must run>
+## Feature engineering
+
+## https://www.kaggle.com/mrisdal/exploring-survival-on-the-titanic
+
+# Grab title from passenger names
+merge$Title <- gsub('(.*, )|(\\..*)', '', merge$Name)
+
+# Show title counts by sex
+table(merge$Sex, merge$Title)
+
+# Titles with very low cell counts to be combined to "rare" level
+rare_title <- c('Dona', 'Lady', 'the Countess','Capt', 'Col', 'Don', 
+                'Dr', 'Major', 'Rev', 'Sir', 'Jonkheer')
+
+# Also reassign mlle, ms, and mme accordingly
+merge$Title[merge$Title == 'Mlle']        <- 'Miss' 
+merge$Title[merge$Title == 'Ms']          <- 'Miss'
+merge$Title[merge$Title == 'Mme']         <- 'Mrs' 
+merge$Title[merge$Title %in% rare_title]  <- 'Rare Title'
+
+# Show title counts by sex again
+table(merge$Sex, merge$Title)
+
+```
+
+```{r}
+#Common Code chunk <must run>
+# Split back to Test, Train after cleaning
+
+train <- merge[merge$IsTrain==TRUE,]
+test <- merge[!merge$IsTrain==TRUE,]
+
+```
+
+```{r}
+
+# Classification Model  - Random Forest
+
+# Tuning RF model ---- Finding optimal mtry values based on OOB
+
+train_index <- names(train)
+
+y <- as.factor(train$Survived) #Just "Survived":: factor for classification, numeric for regression
+
+x <- train_index[-c(1,2,4,11,13)] # Dropping id, survived, name, cabin, istrain
+
+rf_tuner <- tuneRF(x=train[x], y, mtryStart=2, ntreeTry=500, stepFactor=2, improve=0.02, trace=TRUE, plot=TRUE, doBest=FALSE, importance=TRUE)
+
+# Optimal mtry found to be 8
+
+
+```
+
+```{r}
+
+# Classification Model  - Random Forest
+#explicitly select the columns for prediction and store in formula
+
+form <- as.formula("Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked + Title")
+
+form_ordered_var <- as.formula("Survived ~  Sex + Pclass + Fare + Title + Age + SibSp + Embarked + Parch")
+
+#Train Model on train data with mtry 4
+
+rf_model <- randomForest(formula = form, data = train, ntree = 500, mtry = 8, importance=TRUE)
+
+
+#Make Prediction on Test set
+
+Survived <- predict(rf_model, newdata = test)
+
+#Check Prediction
+
+#Survived
+
+#### Create output file
+
+#save Id values from test data
+PassengerId <- test$PassengerId
+
+#Initiate output dataframe with IDs
+df <- as.data.frame(PassengerId)
+
+#Add column for prediction
+df$Survived <- Survived
+
+#Check Structure of output dataframe
+#str(df)
+
+#write submission file, it will be saved in your working directory
+
+write.csv(df, file = "Submission_title_FE_tuned_rf.csv", row.names = FALSE)
+
+```
+
+## rf_tune: Your submission scored 0.77990, which is an improvement of your previous score of 0.77272. 
+
+```{r}
+
+## Refer: Notes
+# Build the decision tree
+dtree <- rpart(form, data=train, method="class")
+
+
+# Predict on test set
+
+dtree_predict <- predict(dtree, newdata=test, type="class")
+
+fancyRpartPlot(dtree)
+
+df_dtree <- df #copy the structure of rf result dataframe
+
+df_dtree$Survived <- dtree_predict #Save the decision tree prediction to result dataframe
+
+write.csv(df, file = "baseSubmission_dtree.csv", row.names = FALSE)
+ 
+# using svm model to predict
+
+
+# tuning the svm for getting the best fit parameters for gamma and cost
+
+svm_model_tune= tune.svm(form, data = train, gamma = seq(.1,0.5,0.1), cost = seq(1,60,10))
+
+tuned$best.parameters
+
+model <- svm(form, data = train, gamma = 0.1, cost = 1, type = "C-classification")
+
+summary(model)
+
+# getting the results from the predicted model
+
+fitted.results <- predict(model,newdata=test,type='response')
+
+fitted.results = as.vector(fitted.results)
+
+fitted.results = data.frame(Survived= fitted.results)
+
+testData = read.csv("../input/test.csv", header = T)
+
+myResults = cbind(testData, fitted.results)
+
+# writing the results back into the file
+write.csv(myResults,file = "myResults10.csv")
+
+## Train rf classifier on validation set ## In this approach we will split train data to half (Training set and validation set)
+
+# Calculate the size of each of the data sets:
+data_set_size <- floor(nrow(train)/2)
+# Generate a random sample of "data_set_size" indexes
+indexes <- sample(1:nrow(train), size = data_set_size)
+
+# Assign the data to the correct sets
+training <- train[indexes,]
+validation1 <- train[-indexes,]
+
+rf_classifier <- randomForest(form, data = training, ntree = 100, mtry = 2, importance=TRUE )
+
+#See RF Classifier
+
+rf_classifier
+
+varImpPlot(rf_classifier)
+
+rf_model <- randomForest(formula = form, data = train, ntree = 500, mtry = 3, nodesize = 0.01 * nrow(train),  importance=TRUE)
+
+
+
+#importance(rf_model)
+
+# Get importance
+importance    <- importance(rf_model)
+varImportance <- data.frame(Variables = row.names(importance), 
+                            Importance = round(importance[ ,'MeanDecreaseGini'],2))
+
+```
+## Now you can upload the csv file to Kaggle and check your score. Score of rf model was 0.77272 at the time of upload.
+
+```{r}
+
+#Test options and evaluation metric.
+#Lets define a test harness.
+# We will use 10-fold cross validation with 3 repeats. This is a good standard test harness configuration. It is a binary classification problem. For simplicity, we will use Accuracy and Kappa metrics.
+
+
+# 10-fold cross validation with 3 repeats
+trainControl <- trainControl(method="repeatedcv", number=10, repeats=3)
+metric <- "Accuracy"
+
+
+#Define the variables in Formula
+form <- as.formula("Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked + Title")
+
+```
+
+```{r}
+##Spot-Check Algorithms
+
+# LG
+set.seed(666)
+fit.glm <- train(form, data=train, method="glm", metric=metric, trControl=trainControl)
+
+# LDA
+set.seed(666)
+fit.lda <- train(form, data=train, method="lda", metric=metric, trControl=trainControl)
+
+# GLMNET
+set.seed(666)
+fit.glmnet <- train(form, data=train, method="glmnet", metric=metric,
+    trControl=trainControl)
+
+# KNN
+set.seed(666)
+fit.knn <- train(form, data=train, method="knn", metric=metric, trControl=trainControl)
+
+
+# CART
+set.seed(666)
+fit.cart <- train(form, data=train, method="rpart", metric=metric,
+    trControl=trainControl)
+
+# Naive Bayes
+set.seed(666)
+fit.nb <- train(form, data=train, method="nb", metric=metric, trControl=trainControl)
+
+
+# SVM
+set.seed(666)
+fit.svm <- train(form, data=train, method="svmRadial", metric=metric,
+    trControl=trainControl)
+
+```
+
+```{r}
+
+# Compare algorithms
+results <- resamples(list(LG=fit.glm, LDA=fit.lda, GLMNET=fit.glmnet, KNN=fit.knn,
+    CART=fit.cart, SVM=fit.svm))  #, NB=fit.nb
+summary(results)
+
+dotplot(results)
+
+```
+#SVM has the highest accuracy 83.76%
+
+```{r}
+
+#https://rpubs.com/dvdbisong/titanic
+#https://machinelearningmastery.com/how-to-estimate-model-accuracy-in-r-using-the-caret-package/
+
+#SVM prediction
+#Make Prediction on Test set
+
+Survived <- predict(fit.svm, test, type="class")
+
+#Check Prediction
+
+#Survived
+
+#### Create output file
+
+#save Id values from test data
+PassengerId <- test$PassengerId
+
+#Initiate output dataframe with IDs
+df <- as.data.frame(PassengerId)
+
+#Add column for prediction
+df$Survived <- Survived
+
+#Check Structure of output dataframe
+#str(df)
+
+#write submission file, it will be saved in your working directory
+
+write.csv(df, file = "Submission_title_FE_tuned_svm.csv", row.names = FALSE)
+
+```
